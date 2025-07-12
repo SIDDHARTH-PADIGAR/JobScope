@@ -24,6 +24,7 @@ func main() {
 	r := mux.NewRouter()
 	r.HandleFunc("/jobs", handler.CreateJob).Methods("POST")
 	r.HandleFunc("/jobs", handler.GetAllJobs).Methods("GET")
+	r.HandleFunc("/jobs/stats", handler.GetStats).Methods("GET") // <- put this before {id}
 	r.HandleFunc("/jobs/{id}", handler.GetJobByID).Methods("GET")
 	r.HandleFunc("/jobs/{id}/status", handler.UpdateJobStatus).Methods("PATCH")
 

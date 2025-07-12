@@ -8,6 +8,35 @@ import (
 	"time"
 )
 
+type Stats struct {
+	Total   int `json:"total"`
+	Queued  int `json:"queued"`
+	Running int `json:"running"`
+	Done    int `json:"done"`
+	Failed  int `json:"failed"`
+}
+
+func (s *Service) GetStats() Stats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stats := Stats{}
+	for _, job := range s.jobs {
+		stats.Total++
+		switch job.Status {
+		case "queued":
+			stats.Queued++
+		case "running":
+			stats.Running++
+		case "done":
+			stats.Done++
+		case "failed":
+			stats.Failed++
+		}
+	}
+	return stats
+}
+
 type Service struct {
 	jobs   []Job
 	mu     sync.Mutex

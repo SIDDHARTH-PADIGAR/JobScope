@@ -58,6 +58,11 @@ func (h *Handler) GetJobByID(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(job)
 }
 
+func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
+	stats := h.Service.GetStats()
+	json.NewEncoder(w).Encode(stats)
+}
+
 // PATCH req /jobs/{id}/status
 func (h *Handler) UpdateJobStatus(w http.ResponseWriter, r *http.Request) {
 	idStr := mux.Vars(r)["id"]
