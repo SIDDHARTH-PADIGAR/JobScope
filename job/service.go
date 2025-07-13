@@ -1,9 +1,9 @@
-// job/service.go
 package job
 
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -14,27 +14,6 @@ type Stats struct {
 	Running int `json:"running"`
 	Done    int `json:"done"`
 	Failed  int `json:"failed"`
-}
-
-func (s *Service) GetStats() Stats {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	stats := Stats{}
-	for _, job := range s.jobs {
-		stats.Total++
-		switch job.Status {
-		case "queued":
-			stats.Queued++
-		case "running":
-			stats.Running++
-		case "done":
-			stats.Done++
-		case "failed":
-			stats.Failed++
-		}
-	}
-	return stats
 }
 
 type Service struct {
@@ -64,25 +43,8 @@ func NewService() (*Service, error) {
 	}, nil
 }
 
-func (s *Service) GetAllJobs() []Job {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.jobs
-}
-
-func (s *Service) GetJobByID(id int) (*Job, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, job := range s.jobs {
-		if job.ID == id {
-			j := job
-			return &j, nil
-		}
-	}
-	return nil, errors.New("job not found")
-}
-
-func (s *Service) CreateJob(title, desc string) (*Job, error) {
+// CreateJob accepts title, description, priority
+func (s *Service) CreateJob(title, desc string, priority int) (*Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -93,7 +55,10 @@ func (s *Service) CreateJob(title, desc string) (*Job, error) {
 		Status:      "queued",
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
+		Priority:    priority,
+		Retries:     0,
 	}
+
 	s.jobs = append(s.jobs, job)
 	s.nextID++
 
@@ -101,6 +66,25 @@ func (s *Service) CreateJob(title, desc string) (*Job, error) {
 		return nil, err
 	}
 	return &job, nil
+}
+
+func (s *Service) GetAllJobs() []Job {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.jobs
+}
+
+func (s *Service) GetJobByID(id int) (*Job, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, job := range s.jobs {
+		if job.ID == id {
+			j := job
+			return &j, nil
+		}
+	}
+	return nil, errors.New("job not found")
 }
 
 func (s *Service) UpdateJobStatus(id int, newStatus string) (*Job, error) {
@@ -121,37 +105,84 @@ func (s *Service) UpdateJobStatus(id int, newStatus string) (*Job, error) {
 	return nil, errors.New("job not found")
 }
 
+func (s *Service) GetStats() Stats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stats := Stats{}
+	for _, job := range s.jobs {
+		stats.Total++
+		switch job.Status {
+		case "queued":
+			stats.Queued++
+		case "running":
+			stats.Running++
+		case "done":
+			stats.Done++
+		case "failed":
+			stats.Failed++
+		}
+	}
+	return stats
+}
+
 func (s *Service) StartWorker() {
 	go func() {
 		for {
 			s.processNextJob()
-			time.Sleep(3 * time.Second) // poll every 3s
+			time.Sleep(3 * time.Second) // poll interval
 		}
 	}()
 }
 
 func (s *Service) processNextJob() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+
+	var nextIdx = -1
+	highestPriority := 6 // valid priority: 1 to 5
 
 	for i, job := range s.jobs {
-		if job.Status == "queued" {
-			fmt.Printf("[Worker] Running job ID %d: %s\n", job.ID, job.Title)
-			s.jobs[i].Status = "running"
-			s.jobs[i].UpdatedAt = time.Now()
-			SaveJobs(s.jobs)
-
-			// simulate work
-			s.mu.Unlock() // release during sleep
-			time.Sleep(5 * time.Second)
-			s.mu.Lock()
-
-			s.jobs[i].Status = "done"
-			s.jobs[i].UpdatedAt = time.Now()
-			SaveJobs(s.jobs)
-
-			fmt.Printf("[Worker] Completed job ID %d: %s\n", job.ID, job.Title)
-			return // process one job at a time
+		if job.Status == "queued" && job.Priority < highestPriority {
+			highestPriority = job.Priority
+			nextIdx = i
 		}
 	}
+
+	if nextIdx == -1 {
+		s.mu.Unlock()
+		return // no queued jobs
+	}
+
+	// move to running
+	job := &s.jobs[nextIdx]
+	job.Status = "running"
+	job.UpdatedAt = time.Now()
+	fmt.Printf("[Worker] Running job ID %d: %s (retry %d)\n", job.ID, job.Title, job.Retries)
+
+	SaveJobs(s.jobs)
+	s.mu.Unlock()
+
+	// simulate job work
+	time.Sleep(5 * time.Second)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Simulate failure: 30% chance
+	if rand.Intn(100) < 30 {
+		job.Retries++
+		if job.Retries > 3 {
+			job.Status = "failed"
+			fmt.Printf("[Worker] Job ID %d failed permanently after 3 retries\n", job.ID)
+		} else {
+			job.Status = "queued"
+			fmt.Printf("[Worker] Job ID %d failed (retry %d), requeued\n", job.ID, job.Retries)
+		}
+	} else {
+		job.Status = "done"
+		fmt.Printf("[Worker] Completed job ID %d: %s\n", job.ID, job.Title)
+	}
+
+	job.UpdatedAt = time.Now()
+	SaveJobs(s.jobs)
 }

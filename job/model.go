@@ -9,4 +9,6 @@ type Job struct {
 	Status      string    `json:"status"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	Priority    int       `json:"priority"` // 1 = high, 5 = low
+	Retries     int       `json:"retries"`
 }
