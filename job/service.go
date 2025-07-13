@@ -3,6 +3,7 @@ package job
 import (
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"sync"
 	"time"
@@ -17,9 +18,10 @@ type Stats struct {
 }
 
 type Service struct {
-	jobs   []Job
-	mu     sync.Mutex
-	nextID int
+	jobs     []Job
+	mu       sync.Mutex
+	nextID   int
+	shutdown chan struct{} // for graceful shutdown
 }
 
 // NewService initializes the job service and loads from file
@@ -38,8 +40,9 @@ func NewService() (*Service, error) {
 	}
 
 	return &Service{
-		jobs:   jobs,
-		nextID: maxID + 1,
+		jobs:     jobs,
+		nextID:   maxID + 1,
+		shutdown: make(chan struct{}),
 	}, nil
 }
 
@@ -129,10 +132,20 @@ func (s *Service) GetStats() Stats {
 func (s *Service) StartWorker() {
 	go func() {
 		for {
-			s.processNextJob()
-			time.Sleep(3 * time.Second) // poll interval
+			select {
+			case <-s.shutdown:
+				log.Println("[Worker] Shutdown signal received. Exiting worker loop.")
+				return
+			default:
+				s.processNextJob()
+				time.Sleep(3 * time.Second)
+			}
 		}
 	}()
+}
+
+func (s *Service) StopWorker() {
+	close(s.shutdown)
 }
 
 func (s *Service) processNextJob() {
