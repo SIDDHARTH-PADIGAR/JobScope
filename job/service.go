@@ -1,10 +1,9 @@
 package job
 
 import (
+	"context"
 	"errors"
-	"fmt"
 	"log"
-	"math/rand"
 	"sync"
 	"time"
 )
@@ -150,52 +149,54 @@ func (s *Service) StopWorker() {
 
 func (s *Service) processNextJob() {
 	s.mu.Lock()
-
-	var nextIdx = -1
-	highestPriority := 6 // valid priority: 1 to 5
-
+	var selectedIndex = -1
+	var highestPriority = 6 // out of range
 	for i, job := range s.jobs {
 		if job.Status == "queued" && job.Priority < highestPriority {
+			selectedIndex = i
 			highestPriority = job.Priority
-			nextIdx = i
 		}
 	}
-
-	if nextIdx == -1 {
+	if selectedIndex == -1 {
 		s.mu.Unlock()
-		return // no queued jobs
+		return // no job to process
 	}
 
-	// move to running
-	job := &s.jobs[nextIdx]
-	job.Status = "running"
-	job.UpdatedAt = time.Now()
-	fmt.Printf("[Worker] Running job ID %d: %s (retry %d)\n", job.ID, job.Title, job.Retries)
-
+	// Mark as running
+	s.jobs[selectedIndex].Status = "running"
+	s.jobs[selectedIndex].UpdatedAt = time.Now()
+	jobID := s.jobs[selectedIndex].ID
+	title := s.jobs[selectedIndex].Title
 	SaveJobs(s.jobs)
 	s.mu.Unlock()
 
-	// simulate job work
-	time.Sleep(5 * time.Second)
+	log.Printf("[Worker] Running job ID %d: %s", jobID, title)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Simulate work with timeout context
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	// Simulate failure: 30% chance
-	if rand.Intn(100) < 30 {
-		job.Retries++
-		if job.Retries > 3 {
-			job.Status = "failed"
-			fmt.Printf("[Worker] Job ID %d failed permanently after 3 retries\n", job.ID)
-		} else {
-			job.Status = "queued"
-			fmt.Printf("[Worker] Job ID %d failed (retry %d), requeued\n", job.ID, job.Retries)
-		}
-	} else {
-		job.Status = "done"
-		fmt.Printf("[Worker] Completed job ID %d: %s\n", job.ID, job.Title)
+	done := make(chan bool)
+
+	go func() {
+		time.Sleep(6 * time.Second) // simulate heavy work, force timeout
+		done <- true
+	}()
+
+	select {
+	case <-ctx.Done():
+		s.mu.Lock()
+		s.jobs[selectedIndex].Status = "failed"
+		s.jobs[selectedIndex].UpdatedAt = time.Now()
+		SaveJobs(s.jobs)
+		s.mu.Unlock()
+		log.Printf("[Worker] Job ID %d timed out and failed", jobID)
+	case <-done:
+		s.mu.Lock()
+		s.jobs[selectedIndex].Status = "done"
+		s.jobs[selectedIndex].UpdatedAt = time.Now()
+		SaveJobs(s.jobs)
+		s.mu.Unlock()
+		log.Printf("[Worker] Completed job ID %d: %s", jobID, title)
 	}
-
-	job.UpdatedAt = time.Now()
-	SaveJobs(s.jobs)
 }
