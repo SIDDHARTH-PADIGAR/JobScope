@@ -16,7 +16,7 @@ type Stats struct {
 	Failed  int `json:"failed"`
 }
 
-type Service struct {
+type Service struct { //acts as a thread-safe queue for jobs between dispatcher and workers
 	jobs       []Job
 	mu         sync.Mutex
 	nextID     int
@@ -132,6 +132,8 @@ func (s *Service) GetStats() Stats {
 	return stats
 }
 
+// spawns multiple goroutines via go s.worker(i)
+// each worker listens on jobQueue and pulls jobs to excute concurrently.
 func (s *Service) StartWorker() {
 	for i := 0; i < s.workerPool; i++ {
 		go s.worker(i + 1)
@@ -198,6 +200,10 @@ func (s *Service) processNextJob() {
 	}
 }
 
+// scans s.jobs for queued jobs
+// sends them into jobsQueue
+// marks them as enqueued to prever duplicates
+// runs in a separate goroutine
 func (s *Service) dispatcher() {
 	for {
 		select {
@@ -219,8 +225,8 @@ func (s *Service) dispatcher() {
 	}
 }
 
-func (s *Service) worker(id int) {
-	for {
+func (s *Service) worker(id int) { //multiple worker goroutines (via worker pool) pull from jobQueue concurrently
+	for { // each worker runs a job inside a timeout-protected context
 		select {
 		case <-s.shutdown:
 			log.Printf("[Worker %d] Shutdown received. Exiting.\n", id)
@@ -231,6 +237,8 @@ func (s *Service) worker(id int) {
 	}
 }
 
+// runs job logic inside a goroutine
+// uses context.WithTimeout to kill long-running jobs
 func (s *Service) runJob(workerID int, job Job) {
 	log.Printf("[Worker %d] Running job ID %d: %s", workerID, job.ID, job.Title)
 
@@ -254,6 +262,8 @@ func (s *Service) runJob(workerID int, job Job) {
 	}
 }
 
+// locks access to shared state (s.jobs)
+// updates job status safely from multiple workers
 func (s *Service) updateJobStatus(id int, status string) {
 	s.mu.Lock()
 

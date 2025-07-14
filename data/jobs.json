@@ -38,5 +38,15 @@
     "updated_at": "2025-07-13T09:42:05.2981564+05:30",
     "priority": 5,
     "retries": 1
+  },
+  {
+    "id": 5,
+    "title": "Secure Job",
+    "description": "This job is behind auth",
+    "status": "done",
+    "created_at": "2025-07-14T11:40:58.5774564+05:30",
+    "updated_at": "2025-07-14T11:41:02.3839182+05:30",
+    "priority": 3,
+    "retries": 0
   }
 ]

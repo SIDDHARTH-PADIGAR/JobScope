@@ -3,6 +3,7 @@ package main
 import (
 	"JobScope/job"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -42,11 +43,38 @@ func main() {
 
 	// Setup routes
 	r := mux.NewRouter()
-	r.HandleFunc("/jobs", handler.CreateJob).Methods("POST")
+
+	r.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		var creds struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
+			http.Error(w, "Invalid request", http.StatusBadRequest)
+			return
+		}
+
+		if creds.Username != "admin" || creds.Password != "password" {
+			http.Error(w, "UNauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		token, err := job.GenerateToken(creds.Username)
+		if err != nil {
+			http.Error(w, "Could not generate token", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"token": token})
+	}).Methods("POST")
+
+	r.Handle("/jobs", job.AUthMuddlieware(http.HandlerFunc(handler.CreateJob))).Methods("POST")
 	r.HandleFunc("/jobs", handler.GetAllJobs).Methods("GET")
 	r.HandleFunc("/jobs/stats", handler.GetStats).Methods("GET") // keep before /{id}
 	r.HandleFunc("/jobs/{id}", handler.GetJobByID).Methods("GET")
-	r.HandleFunc("/jobs/{id}/status", handler.UpdateJobStatus).Methods("PATCH")
+	r.Handle("/jobs/{id}/status", job.AUthMuddlieware(http.HandlerFunc(handler.UpdateJobStatus))).Methods("PATCH")
 
 	// Setup HTTP server
 	srv := &http.Server{
