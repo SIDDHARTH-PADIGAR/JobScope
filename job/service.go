@@ -17,10 +17,12 @@ type Stats struct {
 }
 
 type Service struct {
-	jobs     []Job
-	mu       sync.Mutex
-	nextID   int
-	shutdown chan struct{} // for graceful shutdown
+	jobs       []Job
+	mu         sync.Mutex
+	nextID     int
+	shutdown   chan struct{} // for graceful shutdown
+	jobQueue   chan Job      // channel queue
+	workerPool int           // number of workers
 }
 
 // NewService initializes the job service and loads from file
@@ -39,9 +41,11 @@ func NewService() (*Service, error) {
 	}
 
 	return &Service{
-		jobs:     jobs,
-		nextID:   maxID + 1,
-		shutdown: make(chan struct{}),
+		jobs:       jobs,
+		nextID:     maxID + 1,
+		shutdown:   make(chan struct{}),
+		jobQueue:   make(chan Job, 100), // buffered channel
+		workerPool: 3,                   // number of concurrent workers,
 	}, nil
 }
 
@@ -129,18 +133,11 @@ func (s *Service) GetStats() Stats {
 }
 
 func (s *Service) StartWorker() {
-	go func() {
-		for {
-			select {
-			case <-s.shutdown:
-				log.Println("[Worker] Shutdown signal received. Exiting worker loop.")
-				return
-			default:
-				s.processNextJob()
-				time.Sleep(3 * time.Second)
-			}
-		}
-	}()
+	for i := 0; i < s.workerPool; i++ {
+		go s.worker(i + 1)
+	}
+
+	go s.dispatcher()
 }
 
 func (s *Service) StopWorker() {
@@ -198,5 +195,74 @@ func (s *Service) processNextJob() {
 		SaveJobs(s.jobs)
 		s.mu.Unlock()
 		log.Printf("[Worker] Completed job ID %d: %s", jobID, title)
+	}
+}
+
+func (s *Service) dispatcher() {
+	for {
+		select {
+		case <-s.shutdown:
+			log.Println("[Dispatcher] Shutdown received")
+			return
+		default:
+			s.mu.Lock()
+			for i := range s.jobs {
+				if s.jobs[i].Status == "queued" {
+					s.jobQueue <- s.jobs[i]
+					s.jobs[i].Status = "enqueued"
+					s.jobs[i].UpdatedAt = time.Now()
+				}
+			}
+			s.mu.Unlock()
+			time.Sleep(2 * time.Second)
+		}
+	}
+}
+
+func (s *Service) worker(id int) {
+	for {
+		select {
+		case <-s.shutdown:
+			log.Printf("[Worker %d] Shutdown received. Exiting.\n", id)
+			return
+		case job := <-s.jobQueue:
+			s.runJob(id, job)
+		}
+	}
+}
+
+func (s *Service) runJob(workerID int, job Job) {
+	log.Printf("[Worker %d] Running job ID %d: %s", workerID, job.ID, job.Title)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan bool)
+
+	go func() {
+		time.Sleep(3 * time.Second) // simulate work
+		done <- true
+	}()
+
+	select {
+	case <-ctx.Done():
+		s.updateJobStatus(job.ID, "failed")
+		log.Printf("[Worker %d] Job ID %d timed out", workerID, job.ID)
+	case <-done:
+		s.updateJobStatus(job.ID, "done")
+		log.Printf("[Worker %d] Completed job ID %d", workerID, job.ID)
+	}
+}
+
+func (s *Service) updateJobStatus(id int, status string) {
+	s.mu.Lock()
+
+	for i := range s.jobs {
+		if s.jobs[i].ID == id {
+			s.jobs[i].Status = status
+			s.jobs[i].UpdatedAt = time.Now()
+			SaveJobs(s.jobs)
+			break
+		}
 	}
 }
